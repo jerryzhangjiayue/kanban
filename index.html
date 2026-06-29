@@ -541,7 +541,7 @@ async function initSupabase() {
     });
     syncStatus = 'online';
     await loadFromSupabase();
-    subscribeToChanges();
+    startPolling();
     // Flush any queued changes that happened before connection
     if (pendingSync) { pendingSync = false; syncToSupabase(); }
     updateSyncBadge();
@@ -556,25 +556,28 @@ let pendingSync = false;
 
 async function loadFromSupabase() {
   if (!supabaseClient) return;
-  const { data, error } = await supabaseClient.from('app_state').select('data, updated_at').eq('id', 'main').single();
-  if (error) {
-    if (error.code === '42P01' || (error.message && error.message.includes('relation')) || error.code === 'PGRST205') {
+  try {
+    const { data, error } = await supabaseClient.rpc('get_kanban_data', { p_secret: APP_SECRET });
+    if (error) {
+      console.error('Load error:', error);
       syncStatus = 'error'; updateSyncBadge();
+      return;
     }
-    return;
+    if (!data) return;
+    const remote = data;
+    // RPC 没有返回 updated_at，用本地时间戳比较逻辑：远端有数据就覆盖本地
+    const remoteTaskCount = (remote.tasks || []).length + (remote.projects || []).length;
+    const localTaskCount = state.tasks.length + state.projects.length;
+    if (remoteTaskCount > 0 || localTaskCount === 0) {
+      applyRemoteData(remote);
+    } else if (localTaskCount > 0 && remoteTaskCount === 0) {
+      // 本地有数据但远端空，推送本地
+      await syncToSupabase();
+    }
+  } catch (e) {
+    console.error('Load failed:', e);
+    syncStatus = 'error'; updateSyncBadge();
   }
-  if (!data || !data.data) return;
-  const remote = data.data;
-  const remoteUpdatedAt = new Date(data.updated_at).getTime();
-  const localLastMod = parseInt(localStorage.getItem('kanban_last_mod') || '0');
-
-  // 纯时间戳比较：远端新 → 拉取覆盖本地；本地新 → 推送覆盖远端
-  if (remoteUpdatedAt > localLastMod) {
-    applyRemoteData(remote);
-  } else if (localLastMod > remoteUpdatedAt) {
-    await syncToSupabase();
-  }
-  // 相等则无需操作
 }
 
 function applyRemoteData(remote) {
@@ -594,11 +597,9 @@ async function syncToSupabase() {
   if (!supabaseClient) return;
   if (syncStatus !== 'online') { pendingSync = true; return; }
   try {
-    const now = new Date().toISOString();
-    const { error } = await supabaseClient.from('app_state').upsert({
-      id: 'main',
-      data: { tasks: state.tasks, projects: state.projects, snapshots: state.snapshots, templates: state.templates },
-      updated_at: now
+    const { data, error } = await supabaseClient.rpc('save_kanban_data', {
+      p_secret: APP_SECRET,
+      p_data: { tasks: state.tasks, projects: state.projects, snapshots: state.snapshots, templates: state.templates }
     });
     if (error) console.error('Sync error:', error);
     localStorage.setItem('kanban_last_mod', Date.now().toString());
@@ -612,18 +613,17 @@ function scheduleSync() {
   syncTimer = setTimeout(syncToSupabase, 800);
 }
 
-function subscribeToChanges() {
-  if (!supabaseClient) return;
-  supabaseClient.channel('kanban_sync')
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'app_state', filter: 'id=eq.main' }, payload => {
-      if (!payload.new || !payload.new.data) return;
-      applyRemoteData(payload.new.data);
-      localStorage.setItem('kanban_last_mod', Date.now().toString());
-    })
-    .subscribe();
+// RPC 模式不支持 realtime 订阅，改用轮询（页面可见时每 10 秒拉取一次）
+let pollTimer = null;
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(() => {
+    if (!document.hidden && syncStatus === 'online') loadFromSupabase();
+  }, 10000);
 }
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
-// 页面重新可见时主动拉取一次（解决手机后台→前台不触发 realtime 的问题）
+// 页面重新可见时主动拉取一次
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && syncStatus === 'online') loadFromSupabase();
 });
@@ -642,17 +642,16 @@ function updateSyncBadge() {
   el.className = 'sync-badge ' + m.cls;
   const colors = { offline: 'var(--text-muted)', connecting: 'var(--priority-med)', online: 'var(--priority-low)', error: 'var(--priority-high)' };
   el.style.color = colors[syncStatus] || colors.offline;
-  const titles = { offline: '未连接云同步（仅本地）', connecting: '正在连接...', online: '云同步已连接', error: '同步连接失败，请检查数据库' };
+  const titles = { offline: '未连接云同步（仅本地）', connecting: '正在连接...', online: '云同步已连接（10秒轮询）', error: '同步连接失败，请检查数据库' };
   el.title = titles[syncStatus] || '';
 }
 
 async function clearSupabase() {
   if (!supabaseClient || syncStatus !== 'online') return;
   try {
-    await supabaseClient.from('app_state').upsert({
-      id: 'main',
-      data: { tasks: [], projects: [], snapshots: {}, templates: [] },
-      updated_at: new Date().toISOString()
+    await supabaseClient.rpc('save_kanban_data', {
+      p_secret: APP_SECRET,
+      p_data: { tasks: [], projects: [], snapshots: {}, templates: [] }
     });
     localStorage.setItem('kanban_last_mod', Date.now().toString());
   } catch (e) { console.error('Clear sync failed:', e); }
