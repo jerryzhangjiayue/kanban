@@ -526,6 +526,7 @@ let clearAllStep = 0;
 // ════════════════════════════════════
 const SUPABASE_URL = 'https://giarqgbkhffkldnkudwn.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_tolgxpTKj6fhdigLBvqXlA_UnD3eQyC';
+const APP_SECRET = 'Kanban2026Secret';
 let supabaseClient = null;
 let syncStatus = 'connecting';
 let isRemoteUpdate = false;
@@ -535,7 +536,8 @@ async function initSupabase() {
   if (typeof supabase === 'undefined') { syncStatus = 'offline'; updateSyncBadge(); return; }
   try {
     supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-      realtime: { params: { eventsPerSecond: 5 } }
+      realtime: { params: { eventsPerSecond: 5 } },
+      global: { headers: { 'x-app-secret': APP_SECRET } }
     });
     syncStatus = 'online';
     await loadFromSupabase();
