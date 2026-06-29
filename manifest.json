@@ -1,0 +1,19 @@
+{
+  "name": "个人任务看板",
+  "short_name": "任务看板",
+  "description": "四象限任务管理看板，支持云同步",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#FAFAF7",
+  "theme_color": "#FAFAF7",
+  "icons": [
+    {
+      "src": "kanban-icon.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
