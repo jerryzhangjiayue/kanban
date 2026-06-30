@@ -308,6 +308,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
   .gantt-label-col, .gantt-row-label { width: 90px; font-size: .7rem; }
   .btn { padding: 7px 12px; font-size: .8rem; }
 }
+/* Password Gate */
+.pwd-overlay { position: fixed; inset: 0; background: var(--bg); z-index: 3000; display: none; align-items: center; justify-content: center; }
+.pwd-overlay.active { display: flex; }
+.pwd-box { text-align: center; max-width: 320px; width: 90%; }
+.pwd-icon { font-size: 2.8rem; margin-bottom: 12px; }
+.pwd-title { font-size: 1.3rem; font-weight: 700; margin-bottom: 4px; }
+.pwd-sub { font-size: .84rem; color: var(--text-muted); margin-bottom: 24px; }
+.pwd-input { width: 100%; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--text); font-size: 1rem; text-align: center; outline: none; margin-bottom: 14px; transition: border-color .2s, box-shadow .2s; }
+.pwd-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pwd-submit { padding: 12px; font-size: .9rem; }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 </style>
 </head>
@@ -333,6 +344,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
     <button class="btn btn-ghost" onclick="openReport()">周报</button>
     <button class="btn btn-ghost" onclick="openProjectManager()">项目管理</button>
     <button class="btn btn-ghost" onclick="openDataManage()">数据管理</button>
+    <button class="btn btn-ghost" onclick="logoutPassword()" title="锁定看板" style="font-size:.82rem;">🔒</button>
     <button class="btn btn-primary" onclick="openModal()">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新建任务
     </button>
@@ -505,6 +517,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
 
 <div class="toast-container" id="toastContainer"></div>
 
+<!-- Password Gate -->
+<div class="pwd-overlay" id="passwordGate">
+  <div class="pwd-box">
+    <div class="pwd-icon">🔒</div>
+    <h2 class="pwd-title">任务看板</h2>
+    <p class="pwd-sub">请输入访问密码</p>
+    <input type="password" class="pwd-input" id="pwdInput" placeholder="密码" autocomplete="off" onkeydown="if(event.key==='Enter')submitPassword()">
+    <button class="btn btn-primary pwd-submit" id="pwdSubmit" onclick="submitPassword()" style="width:100%;justify-content:center;">解锁</button>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 // ════════════════════════════════════
@@ -526,7 +549,7 @@ let clearAllStep = 0;
 // ════════════════════════════════════
 const SUPABASE_URL = 'https://giarqgbkhffkldnkudwn.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_tolgxpTKj6fhdigLBvqXlA_UnD3eQyC';
-const APP_SECRET = 'Kanban2026Secret';
+let userSecret = localStorage.getItem('kanban_pwd') || null; // 用户输入的密码，不存在于代码中
 let supabaseClient = null;
 let syncStatus = 'connecting';
 let isRemoteUpdate = false;
@@ -536,15 +559,76 @@ async function initSupabase() {
   if (typeof supabase === 'undefined') { syncStatus = 'offline'; updateSyncBadge(); return; }
   try {
     supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-      realtime: { params: { eventsPerSecond: 5 } },
-      global: { headers: { 'x-app-secret': APP_SECRET } }
+      realtime: { params: { eventsPerSecond: 5 } }
     });
-    syncStatus = 'online';
+    // 如果没有密码，显示密码输入框
+    if (!userSecret) {
+      showPasswordGate();
+      syncStatus = 'offline';
+      updateSyncBadge();
+      return;
+    }
+    // 有密码，验证并加载数据
+    syncStatus = 'connecting';
+    updateSyncBadge();
     await loadFromSupabase();
     startPolling();
-    // Flush any queued changes that happened before connection
     if (pendingSync) { pendingSync = false; syncToSupabase(); }
+    syncStatus = 'online';
     updateSyncBadge();
+  } catch (e) {
+    console.error('Supabase init failed:', e);
+    syncStatus = 'error';
+    updateSyncBadge();
+  }
+}
+
+// 密码门
+function showPasswordGate() {
+  document.getElementById('passwordGate').classList.add('active');
+  setTimeout(() => document.getElementById('pwdInput').focus(), 100);
+}
+function hidePasswordGate() {
+  document.getElementById('passwordGate').classList.remove('active');
+}
+async function submitPassword() {
+  const pwd = document.getElementById('pwdInput').value.trim();
+  if (!pwd) { toast('请输入密码', 'error'); return; }
+  const btn = document.getElementById('pwdSubmit');
+  btn.disabled = true; btn.textContent = '验证中...';
+  try {
+    // 用输入的密码调用 RPC 验证
+    const { data, error } = await supabaseClient.rpc('get_kanban_data', { p_secret: pwd });
+    if (error || data === null) {
+      toast('密码错误', 'error');
+      document.getElementById('pwdInput').value = '';
+      btn.disabled = false; btn.textContent = '解锁';
+      return;
+    }
+    // 密码正确，保存到 localStorage（同一设备下次免输入）
+    userSecret = pwd;
+    localStorage.setItem('kanban_pwd', pwd);
+    hidePasswordGate();
+    // 加载数据
+    if (data && (data.tasks || data.projects)) applyRemoteData(data);
+    syncStatus = 'online';
+    startPolling();
+    updateSyncBadge();
+    toast('已解锁', 'success');
+  } catch (e) {
+    toast('连接失败，请重试', 'error');
+    btn.disabled = false; btn.textContent = '解锁';
+  }
+}
+function logoutPassword() {
+  localStorage.removeItem('kanban_pwd');
+  userSecret = null;
+  stopPolling();
+  state.tasks = []; state.projects = []; state.snapshots = {}; state.templates = [];
+  localStorage.removeItem(STORAGE_KEY);
+  renderBoard();
+  showPasswordGate();
+}
   } catch (e) {
     console.error('Supabase init failed:', e);
     syncStatus = 'error';
@@ -557,7 +641,7 @@ let pendingSync = false;
 async function loadFromSupabase() {
   if (!supabaseClient) return;
   try {
-    const { data, error } = await supabaseClient.rpc('get_kanban_data', { p_secret: APP_SECRET });
+    const { data, error } = await supabaseClient.rpc('get_kanban_data', { p_secret: userSecret });
     if (error) {
       console.error('Load error:', error);
       syncStatus = 'error'; updateSyncBadge();
@@ -598,7 +682,7 @@ async function syncToSupabase() {
   if (syncStatus !== 'online') { pendingSync = true; return; }
   try {
     const { data, error } = await supabaseClient.rpc('save_kanban_data', {
-      p_secret: APP_SECRET,
+      p_secret: userSecret,
       p_data: { tasks: state.tasks, projects: state.projects, snapshots: state.snapshots, templates: state.templates }
     });
     if (error) console.error('Sync error:', error);
@@ -650,7 +734,7 @@ async function clearSupabase() {
   if (!supabaseClient || syncStatus !== 'online') return;
   try {
     await supabaseClient.rpc('save_kanban_data', {
-      p_secret: APP_SECRET,
+      p_secret: userSecret,
       p_data: { tasks: [], projects: [], snapshots: {}, templates: [] }
     });
     localStorage.setItem('kanban_last_mod', Date.now().toString());
