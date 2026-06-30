@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kanban-v9';
+const CACHE_NAME = 'kanban-v10';
 const ASSETS = ['./', './index.html', './manifest.json', './kanban-icon.png'];
 
 self.addEventListener('install', e => {
@@ -17,18 +17,19 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
+// Network-first 策略：优先从网络获取最新版本，网络失败才用缓存
+// 这样部署新版本后用户能立即拿到，不会卡在旧缓存上
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
-    caches.match(e.request).then(cached => {
-      const fetchPromise = fetch(e.request).then(resp => {
-        if (resp && resp.status === 200 && resp.type === 'basic') {
-          const clone = resp.clone();
-          caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
-        }
-        return resp;
-      }).catch(() => cached);
-      return cached || fetchPromise;
+    fetch(e.request).then(resp => {
+      if (resp && resp.status === 200 && resp.type === 'basic') {
+        const clone = resp.clone();
+        caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
+      }
+      return resp;
+    }).catch(() => {
+      return caches.match(e.request).then(cached => cached || caches.match('./'));
     })
   );
 });
