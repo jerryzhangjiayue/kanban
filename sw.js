@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kanban-v10';
+const CACHE_NAME = 'kanban-v11';
 const ASSETS = ['./', './index.html', './manifest.json', './kanban-icon.png'];
 
 self.addEventListener('install', e => {
