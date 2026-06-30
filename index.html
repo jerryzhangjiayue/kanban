@@ -629,12 +629,6 @@ function logoutPassword() {
   renderBoard();
   showPasswordGate();
 }
-  } catch (e) {
-    console.error('Supabase init failed:', e);
-    syncStatus = 'error';
-    updateSyncBadge();
-  }
-}
 
 let pendingSync = false;
 
